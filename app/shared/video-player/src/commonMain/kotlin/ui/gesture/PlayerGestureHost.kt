@@ -106,6 +106,7 @@ import me.him188.ani.app.videoplayer.ui.progress.PlayerProgressSliderState
 import me.him188.ani.app.videoplayer.ui.rememberAlwaysOnRequester
 import me.him188.ani.app.videoplayer.ui.top.needWorkaroundForFocusManager
 import me.him188.ani.utils.platform.Platform
+import me.him188.ani.utils.platform.isDesktop
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.features.AudioLevelController
 import kotlin.math.absoluteValue
@@ -443,7 +444,7 @@ fun PlayerGestureHost(
     brightnessController: LevelController,
     playbackSpeedControllerState: PlaybackSpeedControllerState?,
     modifier: Modifier = Modifier,
-    family: GestureFamily = LocalPlatform.current.mouseFamily,
+    family: GestureFamily = rememberCurrentGestureFamily().value,
     onTogglePauseResume: () -> Unit = {},
     onToggleFullscreen: () -> Unit = {},
     onExitFullscreen: () -> Unit = {},
@@ -470,25 +471,59 @@ fun PlayerGestureHost(
         val adjustingForwardOrBackward =
             indicatorState.visible && (indicatorState.state == FAST_FORWARD || indicatorState.state == FAST_BACKWARD)
 
-        // TODO: 临时解决方案, 安卓和 PC 需要不同的组件层级关系才能实现各种快捷手势
+        // 使用平台判断来决定布局分支, 而非 GestureFamily, 以支持桌面端触屏动态切换手势模式
         val needWorkaroundForFocusManager = needWorkaroundForFocusManager
-        if (family.useDesktopGestureLayoutWorkaround) {
+        val useDesktopLayout = LocalPlatform.current.isDesktop()
+        if (useDesktopLayout) {
             val indicatorTasker = rememberUiMonoTasker()
             val focusRequester = remember { FocusRequester() }
             val manager = LocalFocusManager.current
             val keyboardFocus = remember { FocusRequester() } // focus 了才能用键盘快捷键
 
             val audioLevelController = playerState.features[AudioLevelController]
+
+            // 触屏模式下自动隐藏控制器
+            if (family.autoHideController) {
+                LaunchedEffect(controllerState.visibility, controllerState.alwaysOn) {
+                    if (controllerState.alwaysOn) return@LaunchedEffect
+                    if (controllerState.visibility.bottomBar) {
+                        delay(VIDEO_GESTURE_TOUCH_SHOW_CONTROLLER_DURATION)
+                        controllerState.toggleFullVisible(false)
+                    }
+                }
+            }
+
             Box(
                 modifier
                     .focusRequester(keyboardFocus)
-                    .ifThen(family.swipeToSeek) {
+                    .ifThen(family.swipeToSeek && enableSwipeToSeek) {
+                        val swipeToSeekRequester = rememberAlwaysOnRequester(controllerState, "swipeToSeek")
                         swipeToSeek(
                             seekerState,
                             Orientation.Horizontal,
                             //调节音量/亮度时禁用水平seek
                             enabled = !adjustingVolumeOrBrightness,
-                        )
+                            onDragStarted = {
+                                if (controllerState.visibility.bottomBar) {
+                                    swipeToSeekRequester.request()
+                                }
+                                controllerState.setRequestProgressBar(swipeToSeekRequester)
+                            },
+                            onDragStopped = {
+                                if (controllerState.visibility.bottomBar) {
+                                    swipeToSeekRequester.cancelRequest()
+                                }
+                                controllerState.cancelRequestProgressBarVisible(swipeToSeekRequester)
+                                progressSliderState.finishPreview()
+                            },
+                        ) {
+                            progressSliderState.run {
+                                if (totalDurationMillis == 0L) return@run
+                                val offsetRatio =
+                                    (currentPositionMillis + seekerState.deltaSeconds.times(1000)).toFloat() / totalDurationMillis
+                                previewPositionRatio(offsetRatio.coerceIn(0f, 1f))
+                            }
+                        }
                     }
                     .ifThen(family.keyboardLeftRightToSeek) {
                         keyboardSeekAndFastForward(
@@ -645,7 +680,14 @@ fun PlayerGestureHost(
 
                     )
 
-                Row(Modifier.focusRequester(focusRequester).matchParentSize()) {
+                Row(
+                    Modifier.focusRequester(focusRequester).matchParentSize()
+                        .ifThen(family.longPressForFastSkip) {
+                            fastSkipState?.let {
+                                longPressFastSkip(it, SkipDirection.FORWARD)
+                            }
+                        },
+                ) {
                     Box(
                         Modifier
                             .ifThen(family.swipeLhsForBrightness) {

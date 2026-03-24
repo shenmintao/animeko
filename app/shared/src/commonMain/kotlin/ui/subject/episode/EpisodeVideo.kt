@@ -95,7 +95,8 @@ import me.him188.ani.app.videoplayer.ui.gesture.LevelController
 import me.him188.ani.app.videoplayer.ui.gesture.LockableVideoGestureHost
 import me.him188.ani.app.videoplayer.ui.gesture.NoOpLevelController
 import me.him188.ani.app.videoplayer.ui.gesture.ScreenshotButton
-import me.him188.ani.app.videoplayer.ui.gesture.mouseFamily
+import me.him188.ani.app.videoplayer.ui.gesture.detectInputType
+import me.him188.ani.app.videoplayer.ui.gesture.rememberCurrentGestureFamily
 import me.him188.ani.app.videoplayer.ui.gesture.rememberGestureIndicatorState
 import me.him188.ani.app.videoplayer.ui.gesture.rememberSwipeSeekerState
 import me.him188.ani.app.videoplayer.ui.hasPageAsState
@@ -169,7 +170,7 @@ internal fun EpisodeVideoImpl(
     modifier: Modifier = Modifier,
     maintainAspectRatio: Boolean = !expanded,
     isFullscreen: Boolean = expanded,
-    gestureFamily: GestureFamily = LocalPlatform.current.mouseFamily,
+    gestureFamily: GestureFamily? = null, // null = auto-detect based on input type
     fastForwardSpeed: Float = 3f,
     contentWindowInsets: WindowInsets = WindowInsets(0.dp),
 ) {
@@ -177,6 +178,11 @@ internal fun EpisodeVideoImpl(
     var isLocked by remember { mutableStateOf(false) }
     val sheetsController = rememberVideoSideSheetsController<EpisodeVideoSideSheetPage>()
     val anySideSheetVisible by sheetsController.hasPageAsState()
+
+    // 动态检测输入类型 (鼠标/触屏), 在桌面端自动切换手势模式
+    val currentPlatform = LocalPlatform.current
+    val gestureFamilyState = rememberCurrentGestureFamily()
+    val effectiveGestureFamily = gestureFamily ?: gestureFamilyState.value
 
     // auto hide cursor
     val videoInteractionSource = remember { MutableInteractionSource() }
@@ -194,7 +200,8 @@ internal fun EpisodeVideoImpl(
             expanded = expanded,
             modifier = modifier
                 .hoverable(videoInteractionSource)
-                .cursorVisibility(showCursor),
+                .cursorVisibility(showCursor)
+                .detectInputType(gestureFamilyState, currentPlatform),
             contentWindowInsets = contentWindowInsets,
             maintainAspectRatio = maintainAspectRatio,
             controllerState = playerControllerState,
@@ -315,7 +322,7 @@ internal fun EpisodeVideoImpl(
                     onToggleFullscreen = onClickFullScreen,
                     onExitFullscreen = onExitFullscreen,
                     onToggleDanmaku = onToggleDanmaku,
-                    family = gestureFamily,
+                    family = effectiveGestureFamily,
                     indicatorState,
                     fastForwardSpeed = fastForwardSpeed,
                 )
@@ -382,7 +389,7 @@ internal fun EpisodeVideoImpl(
                         )
 
                         val audioLevelController = audioController as? MediampAudioLevelController
-                        if (expanded && audioLevelController != null && gestureFamily == GestureFamily.MOUSE) {
+                        if (expanded && audioLevelController != null && effectiveGestureFamily == GestureFamily.MOUSE) {
                             val level by audioLevelController.levelFlow.collectAsState()
                             val isMute by audioLevelController.muteFlow.collectAsState()
 
